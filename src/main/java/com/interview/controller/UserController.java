@@ -25,13 +25,14 @@ public class UserController {
     
     @GetMapping
     public Flux<User> getAllUsers() {
-        return userService.getAllUsers();
+        return userService.getAllUsers()
+                .map(this::sanitizeUser);
     }
     
     @GetMapping("/{id}")
     public Mono<ResponseEntity<User>> getUserById(@PathVariable Long id) {
         return userService.getUserById(id)
-                .map(user -> ResponseEntity.ok(user))
+                .map(user -> ResponseEntity.ok(sanitizeUser(user)))
                 .onErrorResume(error -> Mono.just(ResponseEntity.notFound().build()))
                 .defaultIfEmpty(ResponseEntity.notFound().build());
     }
@@ -39,14 +40,14 @@ public class UserController {
     @PostMapping
     public Mono<ResponseEntity<User>> createUser(@Valid @RequestBody User user) {
         return userService.createUser(user)
-                .map(savedUser -> ResponseEntity.status(HttpStatus.CREATED).body(savedUser))
+                .map(savedUser -> ResponseEntity.status(HttpStatus.CREATED).body(sanitizeUser(savedUser)))
                 .onErrorReturn(ResponseEntity.badRequest().build());
     }
     
     @PutMapping("/{id}")
     public Mono<ResponseEntity<User>> updateUser(@PathVariable Long id, @Valid @RequestBody User user) {
         return userService.updateUser(id, user)
-                .map(updatedUser -> ResponseEntity.ok(updatedUser))
+                .map(updatedUser -> ResponseEntity.ok(sanitizeUser(updatedUser)))
                 .onErrorReturn(ResponseEntity.notFound().build());
     }
     
@@ -59,12 +60,14 @@ public class UserController {
     
     @GetMapping("/department/{department}")
     public Flux<User> getUsersByDepartment(@PathVariable String department) {
-        return userService.getUsersByDepartment(department);
+        return userService.getUsersByDepartment(department)
+                .map(this::sanitizeUser);
     }
     
     @GetMapping("/search")
     public Flux<User> searchUsers(@RequestParam String name) {
-        return userService.searchUsersByName(name);
+        return userService.searchUsersByName(name)
+                .map(this::sanitizeUser);
     }
     
     @GetMapping("/department/{department}/count")
@@ -75,5 +78,17 @@ public class UserController {
     @GetMapping("/department/{department}/emails")
     public Flux<String> getUserEmailsByDepartment(@PathVariable String department) {
         return userService.getUserEmailsByDepartment(department);
+    }
+    
+    // Helper method to remove password from response
+    private User sanitizeUser(User user) {
+        User sanitizedUser = new User();
+        sanitizedUser.setId(user.getId());
+        sanitizedUser.setName(user.getName());
+        sanitizedUser.setEmail(user.getEmail());
+        sanitizedUser.setDepartment(user.getDepartment());
+        sanitizedUser.setEnabled(user.isEnabled());
+        // Password is intentionally not set
+        return sanitizedUser;
     }
 }

@@ -46,6 +46,8 @@ public class UserService {
                     existingUser.setName(user.getName());
                     existingUser.setEmail(user.getEmail());
                     existingUser.setDepartment(user.getDepartment());
+                    existingUser.setEnabled(user.isEnabled());
+                    // Note: Password updates should be handled separately for security
                     return existingUser;
                 })
                 .flatMap(userRepository::save);

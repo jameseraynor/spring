@@ -8,8 +8,11 @@ This project demonstrates a Spring Boot application using reactive programming w
 
 - **Spring Boot 3.2.0**: Application framework
 - **Spring WebFlux**: Reactive web framework
+- **Spring Security**: Security framework with reactive support
 - **Spring Data R2DBC**: Reactive database access
 - **H2 Database**: In-memory database
+- **JWT (JSON Web Tokens)**: Stateless authentication
+- **BCrypt**: Password hashing
 - **Project Reactor**: Reactive programming library (Mono and Flux)
 - **Java 17**: Programming language
 
@@ -80,12 +83,42 @@ Two approaches to handling HTTP requests:
    - Handler methods process requests and produce responses
    - Defined in `SpringReactiveDemoApplication` using route builder
 
+## Security Module
+
+The project includes a comprehensive security implementation with JWT-based authentication and role-based authorization:
+
+### Security Models
+
+1. **Role**: Represents user roles (ADMIN, USER)
+2. **UserRole**: Junction table linking users to roles
+3. **User**: Extended with password and enabled fields
+
+### Authentication & Authorization
+
+- **JWT (JSON Web Tokens)**: Stateless authentication
+- **BCrypt**: Password hashing for secure storage
+- **Role-based access control**: Different permissions for USER and ADMIN roles
+- **Reactive Security**: Non-blocking security filters
+
+### Security Configuration
+
+- **SecurityConfig**: Configures security rules and JWT authentication
+- **JwtUtil**: Handles JWT token generation and validation
+- **JwtAuthenticationManager**: Manages JWT-based authentication
+- **AuthService**: Handles login, registration, and user role management
+
+### Protected Endpoints
+
+- **Public**: `/api/auth/login`, `/api/auth/register`, `/api/public/**`
+- **User Role**: `/api/users/**` (GET, PUT), `/api/functional/**`
+- **Admin Role**: `/api/admin/**`, `/api/users/**` (DELETE, POST)
+
 ## Database Configuration
 
 - Uses R2DBC with H2 in-memory database
-- Schema defined in `schema.sql`
-- Initial data loaded from `data.sql`
-- Configuration in `application.yml`
+- Schema defined in `schema.sql` (includes security tables)
+- Initial data loaded from `data.sql` (includes roles and user-role mappings)
+- Configuration in `application.yml` (includes JWT settings)
 
 ## Testing
 
@@ -218,6 +251,45 @@ The project includes comprehensive tests:
 
 15. **What are the benefits of using constructor injection over field injection?**
 
+### 7. Spring Security with Reactive Applications
+
+- **Reactive Security vs. Traditional Security:**
+  - Non-blocking security filters
+  - Reactive authentication and authorization
+  - SecurityWebFilterChain vs. SecurityFilterChain
+
+- **JWT in Reactive Applications:**
+  - Stateless authentication
+  - Token generation and validation
+  - Custom authentication managers
+
+- **Role-based Access Control:**
+  - Method-level security
+  - URL-based security rules
+  - Authority vs. Role differences
+
+## Security-Related Interview Questions
+
+16. **How does Spring Security work in a reactive application?**
+
+17. **What is JWT and why is it suitable for reactive applications?**
+
+18. **Explain the difference between authentication and authorization.**
+
+19. **How would you implement role-based access control in Spring WebFlux?**
+
+20. **What is the purpose of SecurityWebFilterChain?**
+
+21. **How do you handle password encoding in a reactive application?**
+
+22. **What are the benefits of stateless authentication?**
+
+23. **How would you implement logout in a JWT-based system?**
+
+24. **What security considerations should you have for reactive endpoints?**
+
+25. **How do you test secured reactive endpoints?**
+
 ## Code Examples to Study
 
 ### 1. Creating a Reactive Repository
@@ -298,6 +370,128 @@ void getUserById_ShouldReturnUser_WhenUserExists() {
             .expectBody()
             .jsonPath("$.id").isEqualTo(1)
             .jsonPath("$.name").isEqualTo("John Doe");
+}
+```
+
+### 6. Security Configuration
+
+```java
+@Configuration
+@EnableWebFluxSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+        return http
+                .csrf(csrf -> csrf.disable())
+                .httpBasic(httpBasic -> httpBasic.disable())
+                .formLogin(formLogin -> formLogin.disable())
+                .authorizeExchange(exchanges -> exchanges
+                        .pathMatchers(HttpMethod.POST, "/api/auth/login", "/api/auth/register").permitAll()
+                        .pathMatchers(HttpMethod.DELETE, "/api/users/**").hasRole("ADMIN")
+                        .pathMatchers(HttpMethod.GET, "/api/users/**").hasAnyRole("USER", "ADMIN")
+                        .anyExchange().authenticated()
+                )
+                .addFilterAt(authenticationWebFilter(), SecurityWebFiltersOrder.AUTHENTICATION)
+                .build();
+    }
+}
+```
+
+### 7. JWT Token Generation and Validation
+
+```java
+@Component
+public class JwtUtil {
+
+    public String generateToken(String username, List<String> roles) {
+        Instant now = Instant.now();
+        Instant expiryDate = now.plus(expiration, ChronoUnit.SECONDS);
+
+        return Jwts.builder()
+                .subject(username)
+                .claim("roles", roles)
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(expiryDate))
+                .signWith(getSigningKey())
+                .compact();
+    }
+
+    public boolean isTokenValid(String token) {
+        try {
+            Claims claims = getClaimsFromToken(token);
+            return !claims.getExpiration().before(new Date());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+}
+```
+
+### 8. Authentication Service
+
+```java
+@Service
+public class AuthService {
+
+    public Mono<LoginResponse> login(LoginRequest loginRequest) {
+        return userRepository.findByEmail(loginRequest.getEmail())
+                .filter(User::isEnabled)
+                .filter(user -> passwordEncoder.matches(loginRequest.getPassword(), user.getPassword()))
+                .flatMap(user -> 
+                    roleRepository.findByUserId(user.getId())
+                            .map(Role::getName)
+                            .collectList()
+                            .map(roles -> {
+                                String token = jwtUtil.generateToken(user.getEmail(), roles);
+                                return new LoginResponse(token, user.getName(), roles);
+                            })
+                )
+                .switchIfEmpty(Mono.error(new RuntimeException("Invalid credentials")));
+    }
+}
+```
+
+### 9. Role-Based Access Control
+
+```java
+@RestController
+@RequestMapping("/api/admin")
+public class AdminController {
+
+    @GetMapping("/roles")
+    public Flux<Role> getAllRoles() {
+        return roleService.getAllRoles();
+    }
+
+    @PostMapping("/users/{userId}/roles/{roleId}")
+    public Mono<ResponseEntity<UserRole>> assignRoleToUser(@PathVariable Long userId, @PathVariable Long roleId) {
+        return roleService.assignRoleToUser(userId, roleId)
+                .map(userRole -> ResponseEntity.status(HttpStatus.CREATED).body(userRole))
+                .onErrorResume(error -> Mono.just(ResponseEntity.badRequest().build()));
+    }
+}
+```
+
+### 10. Testing Secured Endpoints
+
+```java
+@Test
+void login_ShouldReturnToken_WhenCredentialsAreValid() {
+    // Given
+    when(authService.login(any(LoginRequest.class))).thenReturn(Mono.just(loginResponse));
+
+    // When & Then
+    webTestClient.post()
+            .uri("/api/auth/login")
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(loginRequest)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody()
+            .jsonPath("$.token").isEqualTo("jwt-token")
+            .jsonPath("$.username").isEqualTo("Test User")
+            .jsonPath("$.roles[0]").isEqualTo("USER");
 }
 ```
 
