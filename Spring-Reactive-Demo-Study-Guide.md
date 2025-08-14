@@ -113,6 +113,100 @@ The project includes a comprehensive security implementation with JWT-based auth
 - **User Role**: `/api/users/**` (GET, PUT), `/api/functional/**`
 - **Admin Role**: `/api/admin/**`, `/api/users/**` (DELETE, POST)
 
+### Request Authentication Flow (WebFlux)
+
+1. Client sends a request with `Authorization: Bearer <jwt>`.
+2. `JwtServerAuthenticationConverter` extracts the Bearer token and creates an `Authentication` with the token as credentials.
+3. `AuthenticationWebFilter` delegates to `JwtAuthenticationManager` to validate the token.
+4. `JwtUtil` verifies signature/expiry, extracts subject (username) and `roles` claim.
+5. `JwtAuthenticationManager` maps roles to authorities (prefixing with `ROLE_`) and builds an authenticated `UsernamePasswordAuthenticationToken`.
+6. Downstream authorization checks (route rules) evaluate these authorities.
+
+Key characteristics:
+- Stateless: no HTTP session; context is not persisted (`NoOpServerSecurityContextRepository`).
+- CSRF disabled: appropriate for stateless APIs using tokens.
+- Custom filter registered at the `AUTHENTICATION` phase to establish the principal before authorization.
+
+### JWT Token Details
+
+- Claims used:
+  - `sub` (subject): the username/email.
+  - `roles`: `List<String>` such as `["USER", "ADMIN"]`.
+- Expiration: configured via `jwt.expiration` (seconds). Default is 86,400 (24h).
+- Signing: HMAC using the secret from `jwt.secret`. Ensure sufficient entropy/length.
+
+Example payload (decoded):
+
+```json
+{
+  "sub": "user@example.com",
+  "roles": ["USER"],
+  "iat": 1700000000,
+  "exp": 1700086400
+}
+```
+
+### Role Mapping and Authorization
+
+- Roles in the token (e.g., `"ADMIN"`) are mapped to Spring authorities by prefixing with `ROLE_` (becomes `"ROLE_ADMIN"`).
+- Route rules use `.hasRole("ADMIN")` or `.hasAnyRole("USER", "ADMIN")` which internally checks for authorities `ROLE_*`.
+- Be consistent: token `roles` should be bare role names (without `ROLE_`) to match the mapping logic.
+
+### Configuration and Secrets
+
+Define JWT settings in `application.yml` (override in environment per deployment):
+
+```yaml
+jwt:
+  secret: ${JWT_SECRET:change-me-in-prod-with-strong-random}
+  expiration: ${JWT_EXPIRATION_SECONDS:86400}
+```
+
+Recommendations:
+- Store `JWT_SECRET` in a secure secret manager or environment variable.
+- Rotate secrets carefully; consider token TTLs and grace periods.
+- Keep H2 console (`/h2-console/**`) disabled or restricted in production.
+
+### Error Handling and HTTP Statuses
+
+- Missing/invalid/expired token: authentication fails; request is treated as unauthenticated → results in `401 Unauthorized` for protected routes.
+- Insufficient role: authenticated but forbidden by route rule → `403 Forbidden`.
+- For public endpoints, requests are permitted without a token.
+
+### Logout in JWT Systems
+
+- No server-side session to invalidate. Clients "log out" by deleting the token.
+- For forced revocation, consider a denylist with token IDs (jti) and short expirations.
+
+### Example: Calling a Protected Endpoint
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     -H "Accept: application/json" \
+     https://api.example.com/api/users/1
+```
+
+### Testing Secured Endpoints (WebTestClient)
+
+Include the Authorization header with a valid token when testing protected routes:
+
+```java
+webTestClient.get()
+    .uri("/api/users/1")
+    .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+    .exchange()
+    .expectStatus().isOk();
+```
+
+### Common Pitfalls and Best Practices
+
+- Prefix mismatch: ensure roles from the token are mapped to `ROLE_*` authorities.
+- Key management: never commit secrets; use env vars or secret stores.
+- Clock skew: allow slight leeway when validating `iat`/`exp` if needed.
+- Token size: keep claims minimal to avoid large headers.
+- CSRF: leaving it enabled for token-auth APIs often breaks requests; disable for stateless JWT.
+- H2 console: restrict to local/dev; not for production.
+
 ## Database Configuration
 
 - Uses R2DBC with H2 in-memory database
